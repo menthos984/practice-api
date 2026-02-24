@@ -9,6 +9,12 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+
+// Security headers
+app.use(helmet());
+
 // Database configuration
 const dbConfig = {
     server: process.env.DB_SERVER,
@@ -21,6 +27,13 @@ const dbConfig = {
         connectTimeout: 30000
     }
 };
+
+// Rate limiting
+const limiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 100 // limit each IP to 100 requests per windowMs
+});
+app.use('/api/', limiter);
 
 // Get all employees with department name
 app.get('/api/employees', async (req, res) => {
@@ -82,7 +95,7 @@ app.post('/api/employees', async (req, res) => {
     if (isNaN(age) || age < 0 || age > 120) {
         return res.status(400).json({ error: 'Invalid age' });
     }
-    
+
     try {
         const { first_name, last_name, age, birthday, department_id } = req.body;
         await sql.connect(dbConfig);
