@@ -1,16 +1,93 @@
 const express = require('express');
 const sql = require('mssql');
 const cors = require('cors');
+const session = require('express-session');
+const { sso } = require('node-expose-sspi');
 require('dotenv').config();
 
 const app = express();
 
 // Middleware
-app.use(cors());
+app.use(cors({
+    origin: 'http://localhost:3000',
+    credentials: true
+}));
 app.use(express.json());
 
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
+
+// Session setup (for caching)
+app.use(session({
+    name: 'sso-session',
+    secret: process.env.SESSION_SECRET || 'change-this',
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+        httpOnly: true,
+        secure: false, // true if HTTPS
+        maxAge: 24 * 60 * 60 * 1000
+    }
+}));
+
+// Session setup (for caching)
+app.use(session({
+    name: 'sso-session',
+    secret: process.env.SESSION_SECRET || 'change-this',
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+        httpOnly: true,
+        secure: false, // true if HTTPS
+        maxAge: 24 * 60 * 60 * 1000
+    }
+}));
+
+// 1. UNPROTECTED ROUTE - Triggers SSO handshake
+app.post('/api/auth/sso-login', sso.auth({ useSession: true }), (req, res) => {
+    // If we get here, authentication succeeded
+    // Store user in session
+    req.session.user = req.sso.user;
+    req.session.authenticated = true;
+
+    res.json({
+        success: true,
+        user: {
+            name: req.sso.user.displayName,
+            username: req.sso.user.name,
+            domain: req.sso.user.domain
+        }
+    });
+});
+
+// 2. Middleware to protect API routes
+function requireAuth(req, res, next) {
+    if (!req.session.authenticated) {
+        return res.status(401).json({ error: 'Not authenticated' });
+    }
+    next();
+}
+
+// 3. Check auth status (for React to verify)
+app.get('/api/auth/status', (req, res) => {
+    if (req.session.authenticated) {
+        res.json({
+            authenticated: true,
+            user: {
+                name: req.session.user.displayName,
+                username: req.session.user.name
+            }
+        });
+    } else {
+        res.json({ authenticated: false });
+    }
+});
+
+// 4. Logout
+app.post('/api/auth/logout', (req, res) => {
+    req.session.destroy();
+    res.json({ success: true });
+});
 
 // Security headers
 app.use(helmet());
@@ -36,7 +113,7 @@ const limiter = rateLimit({
 app.use('/api/', limiter);
 
 // Get all employees with department name
-app.get('/api/employees', async (req, res) => {
+app.get('/api/employees', requireAuth, async (req, res) => {
     try {
         await sql.connect(dbConfig);
         const result = await sql.query`
@@ -53,7 +130,7 @@ app.get('/api/employees', async (req, res) => {
 });
 
 // Get single employee
-app.get('/api/employees/:id', async (req, res) => {
+app.get('/api/employees/:id', requireAuth, async (req, res) => {
     try {
         await sql.connect(dbConfig);
         const result = await sql.query`
@@ -71,7 +148,7 @@ app.get('/api/employees/:id', async (req, res) => {
 });
 
 // Get all departments
-app.get('/api/departments', async (req, res) => {
+app.get('/api/departments', requireAuth, async (req, res) => {
     try {
         await sql.connect(dbConfig);
         const result = await sql.query`SELECT * FROM Departments`;
@@ -84,7 +161,7 @@ app.get('/api/departments', async (req, res) => {
 });
 
 // Create employee
-app.post('/api/employees', async (req, res) => {
+app.post('/api/employees', requireAuth, async (req, res) => {
 
     const { first_name, last_name, age, birthday, department_id } = req.body;
 
@@ -129,7 +206,7 @@ app.post('/api/employees', async (req, res) => {
 });
 
 // Update employee
-app.put('/api/employees/:id', async (req, res) => {
+app.put('/api/employees/:id', requireAuth, async (req, res) => {
     try {
         const { first_name, last_name, age, birthday, department_id } = req.body;
         const id = req.params.id;
@@ -165,7 +242,7 @@ app.put('/api/employees/:id', async (req, res) => {
 });
 
 // Delete employee
-app.delete('/api/employees/:id', async (req, res) => {
+app.delete('/api/employees/:id', requireAuth, async (req, res) => {
     try {
         await sql.connect(dbConfig);
         await sql.query`DELETE FROM Employees WHERE id = ${req.params.id}`;
